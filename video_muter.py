@@ -193,8 +193,16 @@ class VideoMuterApp(TkinterDnD.Tk):
     def __init__(self):
         super().__init__()
         
-        self.title("Video Audio Muter")
+        self.title("Hashbrown")
         self.geometry("700x600")
+        
+        # Set window icon
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
+        if os.path.exists(logo_path):
+            try:
+                self.iconphoto(True, tk.PhotoImage(file=logo_path))
+            except Exception:
+                pass  # If logo fails to load as icon, continue without it
         
         self.video_path = None
         self.video_duration = None
@@ -205,9 +213,24 @@ class VideoMuterApp(TkinterDnD.Tk):
     
     def _create_widgets(self):
         """Create all GUI widgets"""
-        # Title
-        title_label = ttk.Label(self, text="Video Audio Muter", font=('Arial', 16, 'bold'))
-        title_label.pack(pady=10)
+        # Title with logo
+        title_frame = ttk.Frame(self)
+        title_frame.pack(pady=10)
+        
+        # Load and display logo
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
+        if os.path.exists(logo_path):
+            try:
+                logo_img = Image.open(logo_path)
+                # Keep original size (64x43)
+                self.logo_photo = tk.PhotoImage(file=logo_path)
+                logo_label = ttk.Label(title_frame, image=self.logo_photo)
+                logo_label.pack(side=tk.LEFT, padx=10)
+            except Exception:
+                pass  # If logo fails to load, just show text
+        
+        title_label = ttk.Label(title_frame, text="Hashbrown", font=('Arial', 16, 'bold'))
+        title_label.pack(side=tk.LEFT)
         
         # File upload section
         upload_frame = ttk.LabelFrame(self, text="Video File", padding=10)
@@ -234,6 +257,13 @@ class VideoMuterApp(TkinterDnD.Tk):
         
         canvas.create_window((0, 0), window=self.segments_container, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Bind mouse wheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
