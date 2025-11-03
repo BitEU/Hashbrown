@@ -22,6 +22,7 @@ class TimeInputField(ttk.Frame):
         super().__init__(parent, **kwargs)
         
         self.entries = []
+        self.next_external_field = None  # For cross-TimeInputField navigation
         
         # Hour field
         self.hour_var = tk.StringVar()
@@ -48,16 +49,22 @@ class TimeInputField(ttk.Frame):
         # Bind events for auto-navigation
         self._setup_bindings()
     
+    def set_next_field(self, entry_widget):
+        """Set the next field to navigate to after the last entry"""
+        self.next_external_field = entry_widget
+    
     def _setup_bindings(self):
         """Setup key bindings for auto-navigation"""
         for i, entry in enumerate(self.entries):
             entry.bind('<KeyPress>', lambda e, idx=i: self._on_key_press(e, idx))
             entry.bind('<BackSpace>', lambda e, idx=i: self._on_backspace(e, idx))
+            # Bind after the key is processed to handle auto-advance
+            entry.bind('<KeyRelease>', lambda e, idx=i: self._on_key_release(e, idx))
     
     def _on_key_press(self, event, index):
         """Handle key press with auto-advance"""
-        # Only allow numbers
-        if not event.char.isdigit():
+        # Only allow numbers and navigation keys
+        if event.char and not event.char.isdigit():
             return 'break'
         
         entry = self.entries[index]
@@ -65,14 +72,34 @@ class TimeInputField(ttk.Frame):
         
         # Limit to 2 digits
         if len(current_value) >= 2:
-            # Move to next field if available
+            # If we already have 2 digits, move to next field and prevent this digit
             if index < len(self.entries) - 1:
                 self.entries[index + 1].focus()
-                self.entries[index + 1].icursor(tk.END)
+                self.entries[index + 1].icursor(0)
             return 'break'
         
         # Allow the digit to be entered
         return None
+    
+    def _on_key_release(self, event, index):
+        """Handle key release to auto-advance after entering second digit"""
+        # Only process digit keys
+        if not event.char.isdigit():
+            return
+        
+        entry = self.entries[index]
+        current_value = entry.get()
+        
+        # If we just filled this field with 2 digits, move to next
+        if len(current_value) == 2:
+            if index < len(self.entries) - 1:
+                # Move to next field within this TimeInputField
+                self.entries[index + 1].focus()
+                self.entries[index + 1].icursor(0)
+            elif self.next_external_field:
+                # Move to external field (e.g., from Start SS to End HH)
+                self.next_external_field.focus()
+                self.next_external_field.icursor(0)
     
     def _on_backspace(self, event, index):
         """Handle backspace with auto-retreat"""
@@ -132,6 +159,9 @@ class SegmentRow(ttk.Frame):
         ttk.Label(self, text="End:").pack(side=tk.LEFT, padx=5)
         self.end_time = TimeInputField(self)
         self.end_time.pack(side=tk.LEFT, padx=5)
+        
+        # Link the start and end time fields for navigation
+        self.start_time.set_next_field(self.end_time.entries[0])
         
         # Delete button
         self.delete_btn = ttk.Button(self, text="✕", width=3, command=self._on_delete_click)
