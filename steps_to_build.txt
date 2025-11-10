@@ -1,0 +1,4 @@
+1. Download latest FFMPEG essentials 7z (https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-essentials.7z) and extract it
+2. Drag and drop the ffmpeg-YYYY-MM-DD-git-XYZ-essentials_build folder into the project's root directory
+3. `cd` into the program's root directory and execute `pyinstaller VideoMuter.spec --clean`
+4, Open /dist and run the exe

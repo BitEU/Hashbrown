@@ -2,7 +2,9 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import os
+import sys
 import re
+import tempfile
 try:
     # Try newer moviepy import structure (v2.x)
     from moviepy import VideoFileClip, CompositeVideoClip, ImageClip, AudioClip
@@ -187,11 +189,14 @@ class SegmentRow(ttk.Frame):
                 break
 
 
-class VideoMuterApp(TkinterDnD.Tk):
+class HashbrownApp(TkinterDnD.Tk):
     """Main application window"""
     
     def __init__(self):
         super().__init__()
+        
+        # Configure ffmpeg path for moviepy BEFORE any video operations
+        self._configure_ffmpeg()
         
         self.title("Hashbrown")
         self.geometry("700x600")
@@ -210,6 +215,34 @@ class VideoMuterApp(TkinterDnD.Tk):
         
         self._create_widgets()
         self._setup_drag_drop()
+    
+    def _configure_ffmpeg(self):
+        """Configure ffmpeg path for both moviepy and direct usage"""
+        # Determine base path depending on whether we're running as script or executable
+        if getattr(sys, 'frozen', False):
+            # Running as compiled executable
+            base_path = sys._MEIPASS
+        else:
+            # Running as script
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        # Check for bundled ffmpeg
+        bundled_ffmpeg = os.path.join(base_path, 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build', 'bin', 'ffmpeg.exe')
+        
+        if os.path.exists(bundled_ffmpeg):
+            # Set environment variable for imageio_ffmpeg (used by moviepy)
+            os.environ['IMAGEIO_FFMPEG_EXE'] = bundled_ffmpeg
+            self.ffmpeg_path = bundled_ffmpeg
+        else:
+            # Try imageio_ffmpeg as fallback
+            try:
+                import imageio_ffmpeg
+                self.ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+                os.environ['IMAGEIO_FFMPEG_EXE'] = self.ffmpeg_path
+            except:
+                # Fall back to system ffmpeg
+                self.ffmpeg_path = 'ffmpeg'
+                # Don't set environment variable if using system ffmpeg
     
     def _create_widgets(self):
         """Create all GUI widgets"""
@@ -453,56 +486,70 @@ class VideoMuterApp(TkinterDnD.Tk):
                         curr = curr.replace(f'[v{i}]', '[outv]')
                     filter_complex += ';' + curr
             
-            # Mute audio segments
+            # Mute audio segments - skip audio processing for now to isolate the issue
             audio = video.audio
+            temp_audio_path = None
             if audio is not None:
-                # Get original audio
-                original_audio = video.audio
-                
-                # Create new audio with muted segments
-                def make_frame(t):
-                    # Handle both single time values and arrays of time values
-                    frame = original_audio.get_frame(t)
+                try:
+                    # Get original audio
+                    original_audio = video.audio
                     
-                    # Check if t is an array or single value
-                    if isinstance(t, (int, float)):
-                        # Single time value
-                        for start, end in segments:
-                            if start <= t < end:
-                                return frame * 0  # Mute
-                        return frame
-                    else:
-                        # Array of time values
-                        result = frame.copy()
-                        t_array = np.asarray(t)
-                        for start, end in segments:
-                            mask = (t_array >= start) & (t_array < end)
-                            if result.ndim == 1:
-                                result[mask] = 0
+                    # Create new audio with muted segments
+                    def make_frame(t):
+                        # Handle both single time values and arrays of time values
+                        try:
+                            frame = original_audio.get_frame(t)
+                            if frame is None:
+                                return np.zeros((2,))  # Return silence if frame is None
+                                
+                            # Check if t is an array or single value
+                            if isinstance(t, (int, float)):
+                                # Single time value
+                                for start, end in segments:
+                                    if start <= t < end:
+                                        return frame * 0  # Mute
+                                return frame
                             else:
-                                result[mask] = 0
-                        return result
-                
-                muted_audio = AudioClip(make_frame, duration=video.duration, fps=original_audio.fps)
-                
-                # Save audio temporarily
-                muted_audio.write_audiofile('temp-muted-audio.m4a', codec='aac')
+                                # Array of time values
+                                result = frame.copy()
+                                t_array = np.asarray(t)
+                                for start, end in segments:
+                                    mask = (t_array >= start) & (t_array < end)
+                                    if result.ndim == 1:
+                                        result[mask] = 0
+                                    else:
+                                        result[mask] = 0
+                                return result
+                        except Exception as e:
+                            # Return silence if there's any error
+                            if isinstance(t, (int, float)):
+                                return np.zeros((2,))
+                            else:
+                                return np.zeros((len(np.asarray(t)), 2))
+                    
+                    muted_audio = AudioClip(make_frame, duration=video.duration, fps=original_audio.fps)
+                    
+                    # Save audio temporarily with absolute path in temp directory
+                    temp_dir = tempfile.gettempdir()
+                    temp_audio_path = os.path.join(temp_dir, 'hashbrown-temp-muted-audio.m4a')
+                    muted_audio.write_audiofile(temp_audio_path, codec='aac')
+                except Exception as e:
+                    # If audio processing fails, just skip it and process video only
+                    audio = None
+                    temp_audio_path = None
             
             # Close video to release resources
             video.close()
             
-            # Get ffmpeg path from imageio_ffmpeg
-            try:
-                import imageio_ffmpeg
-                ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-            except:
-                ffmpeg_path = 'ffmpeg'  # Fall back to system ffmpeg
+            # Use the ffmpeg path configured in __init__
+            ffmpeg_path = self.ffmpeg_path
             
             # Now use direct ffmpeg for much faster processing with GPU acceleration
             import subprocess
             
             # Prepare mute icon overlay with size
-            temp_icon = 'temp_resized_icon.png'
+            temp_dir = tempfile.gettempdir()
+            temp_icon = os.path.join(temp_dir, 'hashbrown-temp_resized_icon.png')
             from PIL import Image
             icon_img = Image.open(mute_icon_path)
             icon_img.thumbnail((icon_size, icon_size), Image.Resampling.LANCZOS)
@@ -519,27 +566,40 @@ class VideoMuterApp(TkinterDnD.Tk):
             
             # Add audio input if we have muted audio
             if audio is not None:
-                ffmpeg_cmd.extend(['-i', 'temp-muted-audio.m4a'])
+                ffmpeg_cmd.extend(['-i', temp_audio_path])
             
-            # Build filter complex for conditional overlay
+            # Build filter complex for conditional overlay AND audio muting
             overlay_filters = []
             for start, end in segments:
                 overlay_filters.append(f"between(t,{start},{end})")
             
             overlay_enable = '+'.join(overlay_filters) if overlay_filters else '0'
             
-            filter_complex = f"[0:v][1:v]overlay=0:0:enable='{overlay_enable}'[outv]"
+            # Create audio volume filter to mute segments
+            volume_filters = []
+            for start, end in segments:
+                volume_filters.append(f"between(t,{start},{end})")
             
-            ffmpeg_cmd.extend([
-                '-filter_complex', filter_complex,
-                '-map', '[outv]',
-            ])
-            
-            # Map audio
-            if audio is not None:
-                ffmpeg_cmd.extend(['-map', '2:a'])  # Use muted audio from third input
+            # If we have segments to mute, create volume filter
+            if volume_filters:
+                volume_enable = '+'.join(volume_filters)
+                # Mute when condition is true (set volume to 0 during mute segments)
+                audio_filter = f"volume=enable='{volume_enable}':volume=0"
+                filter_complex = f"[0:v][1:v]overlay=0:0:enable='{overlay_enable}'[outv];[0:a]{audio_filter}[outa]"
+                
+                ffmpeg_cmd.extend([
+                    '-filter_complex', filter_complex,
+                    '-map', '[outv]',
+                    '-map', '[outa]',
+                ])
             else:
-                ffmpeg_cmd.extend(['-map', '0:a?'])  # Copy original audio if exists
+                # No muting needed, just overlay
+                filter_complex = f"[0:v][1:v]overlay=0:0:enable='{overlay_enable}'[outv]"
+                ffmpeg_cmd.extend([
+                    '-filter_complex', filter_complex,
+                    '-map', '[outv]',
+                    '-map', '0:a?',  # Copy original audio
+                ])
             
             # Check if NVENC is available, otherwise use CPU encoding
             try:
@@ -580,22 +640,22 @@ class VideoMuterApp(TkinterDnD.Tk):
                 process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, check=True)
             except subprocess.CalledProcessError as e:
                 # Clean up temporary files
-                if os.path.exists('temp-muted-audio.m4a'):
-                    os.remove('temp-muted-audio.m4a')
+                if audio is not None and os.path.exists(temp_audio_path):
+                    os.remove(temp_audio_path)
                 if os.path.exists(temp_icon):
                     os.remove(temp_icon)
                 raise Exception(f"FFmpeg error: {e.stderr}")
             except FileNotFoundError:
                 # Clean up temporary files
-                if os.path.exists('temp-muted-audio.m4a'):
-                    os.remove('temp-muted-audio.m4a')
+                if audio is not None and os.path.exists(temp_audio_path):
+                    os.remove(temp_audio_path)
                 if os.path.exists(temp_icon):
                     os.remove(temp_icon)
                 raise Exception("FFmpeg not found. Please ensure FFmpeg is installed and in your PATH.")
             
             # Clean up temporary files
-            if os.path.exists('temp-muted-audio.m4a'):
-                os.remove('temp-muted-audio.m4a')
+            if audio is not None and os.path.exists(temp_audio_path):
+                os.remove(temp_audio_path)
             if os.path.exists(temp_icon):
                 os.remove(temp_icon)
             
@@ -611,7 +671,7 @@ class VideoMuterApp(TkinterDnD.Tk):
 
 
 def main():
-    app = VideoMuterApp()
+    app = HashbrownApp()
     app.mainloop()
 
 
