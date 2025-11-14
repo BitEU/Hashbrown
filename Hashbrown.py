@@ -221,13 +221,17 @@ class HashbrownApp(TkinterDnD.Tk):
         # Determine base path depending on whether we're running as script or executable
         if getattr(sys, 'frozen', False):
             # Running as compiled executable
-            base_path = sys._MEIPASS
+            # Check in the same directory as the executable first
+            exe_dir = os.path.dirname(sys.executable)
+            bundled_ffmpeg = os.path.join(exe_dir, 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build', 'bin', 'ffmpeg.exe')
+            
+            # Also check if it was extracted to _MEIPASS
+            if not os.path.exists(bundled_ffmpeg):
+                bundled_ffmpeg = os.path.join(sys._MEIPASS, 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build', 'bin', 'ffmpeg.exe')
         else:
             # Running as script
             base_path = os.path.dirname(os.path.abspath(__file__))
-        
-        # Check for bundled ffmpeg
-        bundled_ffmpeg = os.path.join(base_path, 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build', 'bin', 'ffmpeg.exe')
+            bundled_ffmpeg = os.path.join(base_path, 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build', 'bin', 'ffmpeg.exe')
         
         if os.path.exists(bundled_ffmpeg):
             # Set environment variable for imageio_ffmpeg (used by moviepy)
@@ -240,9 +244,12 @@ class HashbrownApp(TkinterDnD.Tk):
                 self.ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
                 os.environ['IMAGEIO_FFMPEG_EXE'] = self.ffmpeg_path
             except:
-                # Fall back to system ffmpeg
+                # Fall back to system ffmpeg - but warn user if not found
                 self.ffmpeg_path = 'ffmpeg'
                 # Don't set environment variable if using system ffmpeg
+                # Show warning that FFmpeg might not be available
+                import warnings
+                warnings.warn("FFmpeg not found in bundled location or via imageio_ffmpeg. Using system FFmpeg if available.")
     
     def _create_widgets(self):
         """Create all GUI widgets"""
@@ -601,12 +608,27 @@ class HashbrownApp(TkinterDnD.Tk):
                     '-map', '0:a?',  # Copy original audio
                 ])
             
-            # Check if NVENC is available, otherwise use CPU encoding
+            # Check if NVENC is available and actually works, otherwise use CPU encoding
+            has_nvenc = False
             try:
-                # Test if NVENC is available
+                # First check if NVENC is compiled into FFmpeg
                 test_cmd = [ffmpeg_path, '-hide_banner', '-encoders']
                 result = subprocess.run(test_cmd, capture_output=True, text=True)
-                has_nvenc = 'h264_nvenc' in result.stdout
+                
+                if 'h264_nvenc' in result.stdout:
+                    # NVENC is compiled in, now test if it actually works on this machine
+                    # Try to initialize NVENC with a dummy command
+                    test_nvenc = [
+                        ffmpeg_path,
+                        '-f', 'lavfi',
+                        '-i', 'nullsrc=s=256x256:d=0.1',
+                        '-c:v', 'h264_nvenc',
+                        '-f', 'null',
+                        '-'
+                    ]
+                    test_result = subprocess.run(test_nvenc, capture_output=True, text=True, timeout=5)
+                    # If the command didn't fail, NVENC is working
+                    has_nvenc = test_result.returncode == 0
             except:
                 has_nvenc = False
             
