@@ -65,7 +65,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -81,7 +81,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=False,  # UPX not installed - install from https://upx.github.io/ for additional ~30% compression
+    upx=True,  # UPX compression enabled for ~30% size reduction
     upx_exclude=[],
     name='Hashbrown',
 )
