@@ -282,7 +282,7 @@ class HashbrownApp(TkinterDnD.Tk):
         ttk.Button(upload_frame, text="Browse...", command=self._browse_file).pack(side=tk.RIGHT, padx=5)
         
         # Segments section
-        segments_frame = ttk.LabelFrame(self, text="Mute Segments", padding=10)
+        segments_frame = ttk.LabelFrame(self, text="Redact Segments", padding=10)
         segments_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         # Scrollable frame for segments
@@ -460,11 +460,11 @@ class HashbrownApp(TkinterDnD.Tk):
             # Load video
             video = VideoFileClip(self.video_path)
             
-            # Check if mute.png exists
-            mute_icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mute.png')
+            # Check if mute_2.png exists
+            mute_icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mute_2.png')
             if not os.path.exists(mute_icon_path):
-                messagebox.showerror("Error", "mute.png not found in program directory.")
-                self.status_label.config(text="Error: mute.png not found", foreground='red')
+                messagebox.showerror("Error", "mute_2.png not found in program directory.")
+                self.status_label.config(text="Error: mute_2.png not found", foreground='red')
                 return
             
             # Calculate mute icon size (1/5 of video height)
