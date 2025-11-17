@@ -309,7 +309,7 @@ class HashbrownApp(TkinterDnD.Tk):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Add segment button
-        ttk.Button(segments_frame, text="+ Add Segment", command=self._add_segment).pack(pady=10)
+        ttk.Button(segments_frame, text="+ Redact Additional Segment", command=self._add_segment).pack(pady=10)
         
         # Add first segment by default
         self._add_segment()
