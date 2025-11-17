@@ -5,16 +5,10 @@ from PyInstaller.utils.hooks import copy_metadata
 import os
 
 # Include logo and mute icon
-datas = [('logo.png', '.'), ('mute.png', '.')]
+datas = [('logo.png', '.'), ('mute.png', '.'), ('mute_2.png', '.')]
 
-# Include the entire ffmpeg essentials folder
-ffmpeg_dir = 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build'
-if os.path.exists(ffmpeg_dir):
-    # Add the bin directory with ffmpeg executables
-    datas.append((os.path.join(ffmpeg_dir, 'bin'), os.path.join(ffmpeg_dir, 'bin')))
-    # Add the LICENSE and README for compliance
-    datas.append((os.path.join(ffmpeg_dir, 'LICENSE'), ffmpeg_dir))
-    datas.append((os.path.join(ffmpeg_dir, 'README.txt'), ffmpeg_dir))
+# NOTE: We don't bundle ffmpeg manually - imageio_ffmpeg already includes it!
+# This saves ~290 MB by avoiding duplication
 
 binaries = []
 hiddenimports = ['tkinterdnd2', 'moviepy', 'moviepy.editor', 'moviepy.video.io.VideoFileClip', 'moviepy.video.compositing.CompositeVideoClip', 'moviepy.video.VideoClip', 'moviepy.audio.AudioClip', 'PIL', 'PIL.Image', 'imageio_ffmpeg', 'subprocess']
@@ -37,9 +31,28 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
-    noarchive=True,
-    optimize=0,
+    excludes=['scipy', 'matplotlib', 'pandas', 'IPython', 'jupyter', 'notebook', 
+              'setuptools', 'distutils', 'lxml', 'pytest', 'tests', 'test',
+              'pydoc', 'pydoc_data', 'doctest', 'xmlrpc',
+              'unittest', 'pkg_resources',  # Not needed for this app
+              # Exclude PIL image codecs you don't use
+              'PIL.AvifImagePlugin', 'PIL.BlpImagePlugin', 'PIL.BmpImagePlugin',
+              'PIL.BufrStubImagePlugin', 'PIL.CurImagePlugin', 'PIL.DcxImagePlugin',
+              'PIL.DdsImagePlugin', 'PIL.EpsImagePlugin', 'PIL.FitsImagePlugin',
+              'PIL.FliImagePlugin', 'PIL.FpxImagePlugin', 'PIL.FtexImagePlugin',
+              'PIL.GbrImagePlugin', 'PIL.GifImagePlugin', 'PIL.GribStubImagePlugin',
+              'PIL.Hdf5StubImagePlugin', 'PIL.IcnsImagePlugin', 'PIL.IcoImagePlugin',
+              'PIL.ImImagePlugin', 'PIL.ImtImagePlugin', 'PIL.IptcImagePlugin',
+              'PIL.Jpeg2KImagePlugin', 'PIL.McIdasImagePlugin', 'PIL.MicImagePlugin',
+              'PIL.MpegImagePlugin', 'PIL.MpoImagePlugin', 'PIL.MspImagePlugin',
+              'PIL.PalmImagePlugin', 'PIL.PcdImagePlugin', 'PIL.PcxImagePlugin',
+              'PIL.PixarImagePlugin', 'PIL.PpmImagePlugin', 'PIL.PsdImagePlugin',
+              'PIL.QoiImagePlugin', 'PIL.SgiImagePlugin', 'PIL.SpiderImagePlugin',
+              'PIL.SunImagePlugin', 'PIL.TgaImagePlugin', 'PIL.WalImagePlugin',
+              'PIL.WebPImagePlugin', 'PIL.WmfImagePlugin', 'PIL.XbmImagePlugin',
+              'PIL.XpmImagePlugin', 'PIL.XVThumbImagePlugin'],
+    noarchive=False,
+    optimize=0,  # numpy has issues with optimize=2
 )
 pyz = PYZ(a.pure)
 
@@ -68,7 +81,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=False,
+    upx=False,  # UPX not installed - install from https://upx.github.io/ for additional ~30% compression
     upx_exclude=[],
     name='Hashbrown',
 )

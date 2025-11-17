@@ -195,7 +195,7 @@ class HashbrownApp(TkinterDnD.Tk):
     def __init__(self):
         super().__init__()
         
-        # Configure ffmpeg path for moviepy BEFORE any video operations
+        # Configure ffmpeg path for moviepy
         self._configure_ffmpeg()
         
         self.title("Hashbrown")
@@ -217,39 +217,16 @@ class HashbrownApp(TkinterDnD.Tk):
         self._setup_drag_drop()
     
     def _configure_ffmpeg(self):
-        """Configure ffmpeg path for both moviepy and direct usage"""
-        # Determine base path depending on whether we're running as script or executable
-        if getattr(sys, 'frozen', False):
-            # Running as compiled executable
-            # Check in the same directory as the executable first
-            exe_dir = os.path.dirname(sys.executable)
-            bundled_ffmpeg = os.path.join(exe_dir, 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build', 'bin', 'ffmpeg.exe')
-            
-            # Also check if it was extracted to _MEIPASS
-            if not os.path.exists(bundled_ffmpeg):
-                bundled_ffmpeg = os.path.join(sys._MEIPASS, 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build', 'bin', 'ffmpeg.exe')
-        else:
-            # Running as script
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            bundled_ffmpeg = os.path.join(base_path, 'ffmpeg-2025-11-10-git-133a0bcb13-essentials_build', 'bin', 'ffmpeg.exe')
-        
-        if os.path.exists(bundled_ffmpeg):
-            # Set environment variable for imageio_ffmpeg (used by moviepy)
-            os.environ['IMAGEIO_FFMPEG_EXE'] = bundled_ffmpeg
-            self.ffmpeg_path = bundled_ffmpeg
-        else:
-            # Try imageio_ffmpeg as fallback
-            try:
-                import imageio_ffmpeg
-                self.ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-                os.environ['IMAGEIO_FFMPEG_EXE'] = self.ffmpeg_path
-            except:
-                # Fall back to system ffmpeg - but warn user if not found
-                self.ffmpeg_path = 'ffmpeg'
-                # Don't set environment variable if using system ffmpeg
-                # Show warning that FFmpeg might not be available
-                import warnings
-                warnings.warn("FFmpeg not found in bundled location or via imageio_ffmpeg. Using system FFmpeg if available.")
+        """Configure ffmpeg path - use imageio_ffmpeg which is bundled with moviepy"""
+        try:
+            import imageio_ffmpeg
+            self.ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+            os.environ['IMAGEIO_FFMPEG_EXE'] = self.ffmpeg_path
+        except Exception as e:
+            # Fallback to system ffmpeg if imageio_ffmpeg fails
+            self.ffmpeg_path = 'ffmpeg'
+            import warnings
+            warnings.warn(f"Could not load imageio_ffmpeg ({e}). Using system FFmpeg if available.")
     
     def _create_widgets(self):
         """Create all GUI widgets"""
