@@ -1,0 +1,12 @@
+TAB controls for sections.
+Placehoders in sections input fields(like "hh" "mm")
+No hours option in case video is less than hour long.
+Auto validation for start and end time, no overflow or invalid configs
+Duration for each segment listed under it or next to it. For verification.
+Percentage of completion.
+red removal button.
+New method for adding silence.
+Fix the app freezing. 
+
+In theory ability to play the video and see where exactly the audio will be muted (like on the timeframe line).
+Custom muted image and its location.
