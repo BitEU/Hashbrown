@@ -7,6 +7,8 @@ import re
 import tempfile
 import threading
 import json
+import subprocess
+from PIL import Image
 
 try:
     # Try newer moviepy import structure (v2.x)
@@ -15,9 +17,6 @@ except ImportError:
     # Fall back to older import structure (v1.x)
     from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip
     from moviepy.audio.AudioClip import AudioClip
-import numpy as np
-import subprocess
-from PIL import Image
 
 
 class TimeInputField(ttk.Frame):
@@ -37,7 +36,7 @@ class TimeInputField(ttk.Frame):
         self.hour_entry.pack(side=tk.LEFT)
         self.entries.append(self.hour_entry)
         
-        ttk.Label(self, text=":").pack(side=tk.LEFT)
+        ttk.Label(self, text=" : ").pack(side=tk.LEFT)
         
         # Minute field
         self.min_var = tk.StringVar()
@@ -45,7 +44,7 @@ class TimeInputField(ttk.Frame):
         self.min_entry.pack(side=tk.LEFT)
         self.entries.append(self.min_entry)
         
-        ttk.Label(self, text=":").pack(side=tk.LEFT)
+        ttk.Label(self, text=" : ").pack(side=tk.LEFT)
         
         # Second field
         self.sec_var = tk.StringVar()
@@ -94,19 +93,30 @@ class TimeInputField(ttk.Frame):
     
     def _on_key_press(self, event, index):
         """Handle key press with auto-advance"""
-        # Only allow numbers and navigation keys
+        # Allow standard navigation keys (Tab, BackSpace, Arrows, Delete) to function normally
+        if event.keysym in ('Tab', 'ISO_Left_Tab', 'BackSpace', 'Left', 'Right', 'Delete', 'Return'):
+            return None
+
+        # Only allow numbers
         if event.char and not event.char.isdigit():
             return 'break'
         
         entry = self.entries[index]
         current_value = entry.get()
         
+        # If selecting text, allow overwrite
+        if entry.selection_present():
+            return None
+
         # Limit to 2 digits
         if len(current_value) >= 2:
             # If we already have 2 digits, move to next field and prevent this digit
             if index < len(self.entries) - 1:
                 self.entries[index + 1].focus()
                 self.entries[index + 1].icursor(0)
+            elif self.next_external_field:
+                self.next_external_field.focus()
+                self.next_external_field.icursor(0)
             return 'break'
         
         # Allow the digit to be entered
@@ -135,10 +145,9 @@ class TimeInputField(ttk.Frame):
     def _on_backspace(self, event, index):
         """Handle backspace with auto-retreat"""
         entry = self.entries[index]
-        cursor_pos = entry.index(tk.INSERT)
         
-        # If at the beginning of the field and not the first field, go back
-        if cursor_pos == 0 and index > 0:
+        # If field is empty or cursor at 0, move back
+        if (not entry.get() or entry.index(tk.INSERT) == 0) and index > 0:
             self.entries[index - 1].focus()
             self.entries[index - 1].icursor(tk.END)
             return 'break'
@@ -152,6 +161,11 @@ class TimeInputField(ttk.Frame):
             m_str = self.min_var.get()
             s_str = self.sec_var.get()
 
+            # Handle placeholders
+            if h_str == self.placeholders["hour"]: h_str = "0"
+            if m_str == self.placeholders["min"]: m_str = "0"
+            if s_str == self.placeholders["sec"]: s_str = "0"
+
             hours = int(h_str) if h_str.isdigit() else 0
             minutes = int(m_str) if m_str.isdigit() else 0
             seconds = int(s_str) if s_str.isdigit() else 0
@@ -162,24 +176,40 @@ class TimeInputField(ttk.Frame):
     
     def get_formatted_value(self):
         """Get the time value formatted as HH:MM:SS"""
-        hours = self.hour_var.get().zfill(2)
-        minutes = self.min_var.get().zfill(2)
-        seconds = self.sec_var.get().zfill(2)
-        return f"{hours}:{minutes}:{seconds}"
+        h = self.hour_var.get()
+        m = self.min_var.get()
+        s = self.sec_var.get()
+        
+        # Clean placeholders
+        if h == self.placeholders["hour"]: h = "00"
+        if m == self.placeholders["min"]: m = "00"
+        if s == self.placeholders["sec"]: s = "00"
+        
+        return f"{h.zfill(2)}:{m.zfill(2)}:{s.zfill(2)}"
     
     def set_value(self, hours=0, minutes=0, seconds=0):
         """Set the time value"""
         self.hour_var.set(str(hours).zfill(2))
         self.min_var.set(str(minutes).zfill(2))
         self.sec_var.set(str(seconds).zfill(2))
+        
+        # Update colors since they are no longer placeholders
+        for entry in self.entries:
+            entry.config(foreground="black")
 
     def toggle_hour_field(self, show=True):
+        # The separator label is the second widget created in __init__
+        hour_separator = self.winfo_children()[1]
+        
         if show:
-            self.hour_entry.pack(side=tk.LEFT)
-            self.hour_entry.master.winfo_children()[1].pack(side=tk.LEFT) # The ":" label
+            # Pack before the minute entry to ensure correct order (HH : MM)
+            # We check if it's mapped to prevent redundant packing errors
+            if not self.hour_entry.winfo_ismapped():
+                self.hour_entry.pack(side=tk.LEFT, before=self.min_entry)
+                hour_separator.pack(side=tk.LEFT, before=self.min_entry)
         else:
             self.hour_entry.pack_forget()
-            self.hour_entry.master.winfo_children()[1].pack_forget() # The ":" label
+            hour_separator.pack_forget()
 
 
 class SegmentRow(ttk.Frame):
@@ -192,7 +222,7 @@ class SegmentRow(ttk.Frame):
         self.on_delete = on_delete
         
         # Segment label
-        ttk.Label(self, text=f"Segment {segment_num}:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(self, text=f"{segment_num}:").pack(side=tk.LEFT, padx=5)
         
         # Start time
         ttk.Label(self, text="Start:").pack(side=tk.LEFT, padx=5)
@@ -250,9 +280,11 @@ class SegmentRow(ttk.Frame):
         """Update segment number label"""
         self.segment_num = num
         for widget in self.winfo_children():
-            if isinstance(widget, ttk.Label) and widget.cget('text').startswith('Segment'):
-                widget.config(text=f"Segment {num}:")
-                break
+            if isinstance(widget, ttk.Label) and widget.cget('text').startswith('Segment') or widget.cget('text').endswith(':'):
+                 # Simple check for the first label "1:", "2:", etc.
+                 if len(widget.cget('text')) < 5 and widget.cget('text').endswith(':'):
+                    widget.config(text=f"{num}:")
+                    break
 
 
 class HashbrownApp(TkinterDnD.Tk):
@@ -265,7 +297,7 @@ class HashbrownApp(TkinterDnD.Tk):
         self._configure_ffmpeg()
         
         self.title("Hashbrown")
-        self.geometry("700x600")
+        self.geometry("700x650")
         
         # Set window icon
         logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
@@ -277,8 +309,10 @@ class HashbrownApp(TkinterDnD.Tk):
         
         self.video_path = None
         self.video_duration = None
+        self.video_bitrate = None # Stores the original bitrate
         self.is_video_long = False
         self.segment_rows = []
+        self.is_processing = False
         
         self._create_widgets()
         self._setup_drag_drop()
@@ -335,7 +369,7 @@ class HashbrownApp(TkinterDnD.Tk):
         segments_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         # Scrollable frame for segments
-        canvas = tk.Canvas(segments_frame, height=300)
+        canvas = tk.Canvas(segments_frame, height=250)
         scrollbar = ttk.Scrollbar(segments_frame, orient="vertical", command=canvas.yview)
         self.segments_container = ttk.Frame(canvas)
         
@@ -363,10 +397,21 @@ class HashbrownApp(TkinterDnD.Tk):
         # Add first segment by default
         self._add_segment()
         
+        # Progress Section
+        progress_frame = ttk.Frame(self)
+        progress_frame.pack(fill=tk.X, padx=20, pady=5)
+        
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
+        self.progress_bar.pack(fill=tk.X, pady=5)
+        
+        self.progress_label = ttk.Label(progress_frame, text="0%", font=('Arial', 9))
+        self.progress_label.pack()
+        
         # Process button
         process_btn = ttk.Button(self, text="Process Video", command=self._process_video, 
                                  style='Accent.TButton')
-        process_btn.pack(pady=20)
+        process_btn.pack(pady=10)
         
         # Status label
         self.status_label = ttk.Label(self, text="", foreground='blue')
@@ -403,7 +448,7 @@ class HashbrownApp(TkinterDnD.Tk):
             self._load_video(file_path)
     
     def _load_video(self, file_path):
-        """Load video and get its duration using ffprobe for speed."""
+        """Load video and get its duration and bitrate using ffprobe."""
         try:
             self.video_path = file_path
             
@@ -411,11 +456,35 @@ class HashbrownApp(TkinterDnD.Tk):
                 'ffprobe', '-v', 'quiet', '-print_format', 'json',
                 '-show_format', '-show_streams', file_path
             ]
-            result = subprocess.run(ffprobe_cmd, capture_output=True, text=True, check=True)
+            
+            # Use creationflags on Windows to hide console
+            startupinfo = None
+            if sys.platform == 'win32':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            
+            result = subprocess.run(ffprobe_cmd, capture_output=True, text=True, check=True, startupinfo=startupinfo)
             properties = json.loads(result.stdout)
             
             self.video_duration = float(properties['format']['duration'])
             self.is_video_long = self.video_duration >= 3600
+            
+            # We look for the total format bitrate. If missing, default to 2M.
+            try:
+                self.video_bitrate = int(properties['format'].get('bit_rate', 0))
+                if self.video_bitrate == 0:
+                    # Fallback: try to sum up stream bitrates
+                    v_br = 0
+                    a_br = 0
+                    for stream in properties['streams']:
+                        if stream['codec_type'] == 'video':
+                            v_br = int(stream.get('bit_rate', 2000000))
+                        elif stream['codec_type'] == 'audio':
+                            a_br = int(stream.get('bit_rate', 128000))
+                    self.video_bitrate = v_br + a_br
+            except Exception:
+                self.video_bitrate = 2000000 # 2Mbps default fallback
+
             for row in self.segment_rows:
                 row.start_time.toggle_hour_field(self.is_video_long)
                 row.end_time.toggle_hour_field(self.is_video_long)
@@ -423,11 +492,17 @@ class HashbrownApp(TkinterDnD.Tk):
             # Update UI
             filename = os.path.basename(file_path)
             duration_str = self._format_time(self.video_duration)
+            
+            # Show bitrate in UI for confirmation
+            bitrate_mbps = self.video_bitrate / 1000000
+            
             self.file_label.config(
-                text=f"{filename} (Duration: {duration_str})",
+                text=f"{filename} ({duration_str}, ~{bitrate_mbps:.2f} Mbps)",
                 foreground='black'
             )
             self.status_label.config(text="Video loaded successfully!", foreground='green')
+            self.progress_var.set(0)
+            self.progress_label.config(text="0%")
 
         except subprocess.CalledProcessError as e:
             messagebox.showerror("Error", f"Failed to probe video with ffprobe: {e.stderr}")
@@ -450,8 +525,14 @@ class HashbrownApp(TkinterDnD.Tk):
         row.pack(fill=tk.X, pady=5)
         self.segment_rows.append(row)
 
+        # Set toggle state based on video length
         row.start_time.toggle_hour_field(self.is_video_long)
         row.end_time.toggle_hour_field(self.is_video_long)
+        
+        # If not the first segment, link the previous end time to this new start time for Tab key
+        if len(self.segment_rows) > 1:
+             prev_row = self.segment_rows[-2]
+             prev_row.end_time.set_next_field(row.start_time.entries[0])
     
     def _delete_segment(self, row):
         """Delete a segment row"""
@@ -459,13 +540,21 @@ class HashbrownApp(TkinterDnD.Tk):
             messagebox.showwarning("Warning", "You must have at least one segment.")
             return
         
+        # Find index to repair Tab navigation links later if needed
+        idx = self.segment_rows.index(row)
+        
         self.segment_rows.remove(row)
         row.destroy()
         
-        # Renumber remaining segments
+        # Renumber remaining segments and fix Tab navigation links
         for i, segment_row in enumerate(self.segment_rows):
             segment_row.update_label(i + 1)
-    
+            # Re-link Tab navigation
+            if i < len(self.segment_rows) - 1:
+                segment_row.end_time.set_next_field(self.segment_rows[i+1].start_time.entries[0])
+            else:
+                segment_row.end_time.next_external_field = None
+
     def _validate_segments(self):
         """Validate all segments"""
         if not self.video_path:
@@ -506,10 +595,15 @@ class HashbrownApp(TkinterDnD.Tk):
     
     def _process_video(self):
         """Validates segments and starts the processing in a separate thread."""
+        if self.is_processing:
+            return
+
         final_segments = self._validate_segments()
         if not final_segments:
             return
 
+        self.is_processing = True
+        
         # Disable the process button to prevent multiple clicks
         for widget in self.winfo_children():
             if isinstance(widget, ttk.Button) and "Process" in widget.cget('text'):
@@ -517,10 +611,11 @@ class HashbrownApp(TkinterDnD.Tk):
                 self.process_button = widget # Save reference to re-enable later
                 break
 
+        self.progress_var.set(0)
         self.status_label.config(text="Starting video processing...", foreground='blue')
         self.update_idletasks()
 
-        # Run the heavy processing in a separate thread to keep the GUI responsive
+        # Run the heavy processing in a separate thread
         processing_thread = threading.Thread(
             target=self._run_ffmpeg_processing,
             args=(final_segments,),
@@ -528,17 +623,25 @@ class HashbrownApp(TkinterDnD.Tk):
         )
         processing_thread.start()
 
+    def _update_progress(self, percentage, message=None):
+        """Update the progress bar and label safely from thread"""
+        self.progress_var.set(percentage)
+        self.progress_label.config(text=f"{int(percentage)}%")
+        if message:
+            self.status_label.config(text=message)
+
     def _run_ffmpeg_processing(self, segments):
         """
-        This function runs the actual FFmpeg command.
-        It's designed to be executed in a background thread.
+        Runs the FFmpeg command and parses stderr for progress.
+        Matches original bitrate.
         """
-        temp_icon = None # Initialize to ensure it exists for the finally block
+        temp_icon = None
         try:
             # Generate output filename
             directory = os.path.dirname(self.video_path)
             filename = os.path.basename(self.video_path)
-            output_path = os.path.join(directory, f"processed-{filename}")
+            name_part, ext_part = os.path.splitext(filename)
+            output_path = os.path.join(directory, f"{name_part}_redacted{ext_part}")
 
             # Check if mute icon exists
             mute_icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mute_2.png')
@@ -546,7 +649,6 @@ class HashbrownApp(TkinterDnD.Tk):
                 raise FileNotFoundError("mute_2.png not found in program directory.")
 
             # Get video height to calculate icon size
-            # MoviePy is only used for quick metadata, then closed. This is fine.
             clip = VideoFileClip(self.video_path)
             icon_size = int(clip.h / 5)
             clip.close()
@@ -558,11 +660,13 @@ class HashbrownApp(TkinterDnD.Tk):
             icon_img.thumbnail((icon_size, icon_size), Image.Resampling.LANCZOS)
             icon_img.save(temp_icon)
 
-            # --- Build the Correct FFmpeg Command ---
+            # --- Build FFmpeg Command ---
             ffmpeg_path = self.ffmpeg_path
 
             ffmpeg_cmd = [
-                ffmpeg_path, '-y', '-i', self.video_path, '-i', temp_icon,
+                ffmpeg_path, '-y', 
+                '-i', self.video_path, 
+                '-i', temp_icon,
             ]
             
             video_overlay_enables = "+".join([f"between(t,{start},{end})" for start, end in segments])
@@ -571,55 +675,108 @@ class HashbrownApp(TkinterDnD.Tk):
             audio_mute_enables = "+".join([f"between(t,{start},{end})" for start, end in segments])
             audio_filter = f"[0:a]volume=enable='{audio_mute_enables}':volume=0[a_out]"
             
-            # Combine video and audio filters into a single filter_complex string
             filter_complex = f"{video_filter};{audio_filter}"
             
             ffmpeg_cmd.extend([
                 '-filter_complex', filter_complex,
-                '-map', '[v_out]', # Map the final video stream
-                '-map', '[a_out]', # Map the final audio stream
+                '-map', '[v_out]', 
+                '-map', '[a_out]', 
             ])
 
-            # Check for NVENC hardware acceleration
+            # Check for NVENC
             try:
-                encoders = subprocess.check_output([ffmpeg_path, '-encoders'], text=True)
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                encoders = subprocess.check_output([ffmpeg_path, '-encoders'], 
+                                                text=True, 
+                                                startupinfo=startupinfo, 
+                                                stderr=subprocess.STDOUT)
                 has_nvenc = 'h264_nvenc' in encoders
             except Exception:
                 has_nvenc = False
             
+            # Calculate bitrates for command arguments
+            # We use a simple heuristic: allocate 128k to audio, rest to video, but assume video_bitrate captured is total.
+            target_audio_bitrate = 128000
+            target_video_bitrate = max(100000, self.video_bitrate - target_audio_bitrate) 
+            
+            # Convert to string for ffmpeg (e.g., "2000k")
+            v_bitrate_str = f"{target_video_bitrate}"
+            a_bitrate_str = f"{target_audio_bitrate}"
+
+            msg_prefix = "Processing..."
             if has_nvenc:
-                self.status_label.config(text="Processing... (Using NVIDIA NVENC Hardware Acceleration)", foreground='blue')
-                # CORRECTED: Added '-rc:v', 'vbr' for proper constant quality mode with NVENC
-                ffmpeg_cmd.extend(['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc:v', 'vbr', '-cq', '24'])
+                self.after(0, lambda: self.status_label.config(text=f"{msg_prefix} (Using NVIDIA NVENC - Matching Bitrate)", foreground='blue'))
+                # NVENC: Use -b:v to match bitrate instead of -cq
+                ffmpeg_cmd.extend(['-c:v', 'h264_nvenc', '-preset', 'p4', '-b:v', v_bitrate_str])
             else:
-                self.status_label.config(text="Processing... (Using CPU x246 Encoding)", foreground='blue')
-                ffmpeg_cmd.extend(['-c:v', 'libx264', '-preset', 'fast', '-crf', '23'])
+                self.after(0, lambda: self.status_label.config(text=f"{msg_prefix} (Using CPU x264 - Matching Bitrate)", foreground='blue'))
+                # CPU: Use -b:v to match bitrate instead of -crf
+                ffmpeg_cmd.extend(['-c:v', 'libx264', '-preset', 'fast', '-b:v', v_bitrate_str])
 
-            ffmpeg_cmd.extend(['-c:a', 'aac', '-b:a', '192k', output_path])
+            ffmpeg_cmd.extend(['-c:a', 'aac', '-b:a', a_bitrate_str, output_path])
 
-            # Run FFmpeg process
-            process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+            # --- Run Process with Progress Parsing ---
+            creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            
+            process = subprocess.Popen(
+                ffmpeg_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                encoding='utf-8',
+                errors='replace',
+                creationflags=creation_flags
+            )
 
-            # --- Success ---
-            success_msg = f"Video processed successfully! Saved to: {output_path}"
-            self.status_label.config(text=success_msg, foreground='green')
-            messagebox.showinfo("Success", success_msg)
+            # Regex to find time=HH:MM:SS.mm
+            time_pattern = re.compile(r"time=(\d{2}):(\d{2}):(\d{2}\.\d+)")
+
+            while True:
+                line = process.stderr.readline()
+                if line == '' and process.poll() is not None:
+                    break
+                
+                if line:
+                    match = time_pattern.search(line)
+                    if match:
+                        h, m, s = match.groups()
+                        current_seconds = int(h) * 3600 + int(m) * 60 + float(s)
+                        
+                        if self.video_duration and self.video_duration > 0:
+                            percentage = (current_seconds / self.video_duration) * 100
+                            percentage = min(percentage, 99.9) # Cap at 99 until finished
+                            self.after(0, lambda p=percentage: self._update_progress(p))
+
+            return_code = process.wait()
+            
+            if return_code == 0:
+                self.after(0, lambda: self._update_progress(100, "Finished!"))
+                success_msg = f"Video processed successfully! Saved to:\n{output_path}"
+                self.after(0, lambda: messagebox.showinfo("Success", success_msg))
+                self.after(0, lambda: self.status_label.config(text="Processing complete.", foreground='green'))
+            else:
+                raise subprocess.CalledProcessError(return_code, ffmpeg_cmd)
 
         except subprocess.CalledProcessError as e:
-            error_msg = f"FFmpeg Error: {e.stderr}"
-            self.status_label.config(text=error_msg, foreground='red')
-            messagebox.showerror("Error", error_msg)
+            error_msg = f"FFmpeg Error (Code {e.returncode})"
+            self.after(0, lambda: self.status_label.config(text=error_msg, foreground='red'))
+            self.after(0, lambda: messagebox.showerror("Error", error_msg))
+            print(e)
         except Exception as e:
             error_msg = f"An error occurred: {str(e)}"
-            self.status_label.config(text=error_msg, foreground='red')
-            messagebox.showerror("Error", error_msg)
+            self.after(0, lambda: self.status_label.config(text="Error during processing", foreground='red'))
+            self.after(0, lambda: messagebox.showerror("Error", error_msg))
+            print(e)
         finally:
-            # Clean up temporary icon file
+            self.is_processing = False
             if temp_icon and os.path.exists(temp_icon):
-                os.remove(temp_icon)
-            # Re-enable the process button on the main thread
+                try:
+                    os.remove(temp_icon)
+                except:
+                    pass
             if hasattr(self, 'process_button'):
-                self.process_button.config(state=tk.NORMAL)
+                self.after(0, lambda: self.process_button.config(state=tk.NORMAL))
 
 def main():
     app = HashbrownApp()
