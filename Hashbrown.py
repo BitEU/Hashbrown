@@ -9,6 +9,7 @@ import threading
 import json
 import subprocess
 from PIL import Image
+import traceback
 
 try:
     # Try newer moviepy import structure (v2.x)
@@ -298,6 +299,9 @@ class HashbrownApp(TkinterDnD.Tk):
         
         self.title("Hashbrown")
         self.geometry("700x700") # Increased slightly to accommodate new checkbox
+
+        self.current_process = None
+        self.is_cancelled = False
         
         # Set window icon
         logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
@@ -424,6 +428,11 @@ class HashbrownApp(TkinterDnD.Tk):
         process_btn = ttk.Button(self, text="Process Video", command=self._process_video, 
                                  style='Accent.TButton')
         process_btn.pack(pady=10)
+        self.process_button = process_btn
+
+        self.cancel_btn = ttk.Button(self, text="Cancel", command=self._cancel_processing, 
+                                     state=tk.DISABLED, style='Danger.TButton')
+        self.cancel_btn.pack(pady=0)
         
         # Status label
         self.status_label = ttk.Label(self, text="", foreground='blue')
@@ -615,25 +624,33 @@ class HashbrownApp(TkinterDnD.Tk):
             return
 
         self.is_processing = True
+        self.is_cancelled = False  # Reset cancel flag
         
-        # Disable the process button to prevent multiple clicks
-        for widget in self.winfo_children():
-            if isinstance(widget, ttk.Button) and "Process" in widget.cget('text'):
-                widget.config(state=tk.DISABLED)
-                self.process_button = widget # Save reference to re-enable later
-                break
+        self.process_button.config(state=tk.DISABLED)
+        self.cancel_btn.config(state=tk.NORMAL)
 
         self.progress_var.set(0)
         self.status_label.config(text="Starting video processing...", foreground='blue')
         self.update_idletasks()
 
-        # Run the heavy processing in a separate thread
         processing_thread = threading.Thread(
             target=self._run_ffmpeg_processing,
             args=(final_segments,),
             daemon=True
         )
         processing_thread.start()
+
+    def _cancel_processing(self):
+        """Stops the running process and sets the cancel flag."""
+        if self.current_process and self.current_process.poll() is None:
+            self.is_cancelled = True
+            self.status_label.config(text="Cancelling...", foreground='red')
+            
+            # Kill the subprocess
+            self.current_process.kill()
+            
+            # Disable cancel button immediately
+            self.cancel_btn.config(state=tk.DISABLED)
 
     def _update_progress(self, percentage, message=None):
         """Update the progress bar and label safely from thread"""
@@ -649,6 +666,7 @@ class HashbrownApp(TkinterDnD.Tk):
         """
         temp_icon = None
         include_overlay = self.show_overlay_var.get()
+        output_path = None # Initialize output_path scope
 
         try:
             # Generate output filename
@@ -751,7 +769,7 @@ class HashbrownApp(TkinterDnD.Tk):
             # --- Run Process with Progress Parsing ---
             creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             
-            process = subprocess.Popen(
+            self.current_process = subprocess.Popen(
                 ffmpeg_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -765,8 +783,12 @@ class HashbrownApp(TkinterDnD.Tk):
             time_pattern = re.compile(r"time=(\d{2}):(\d{2}):(\d{2}\.\d+)")
 
             while True:
-                line = process.stderr.readline()
-                if line == '' and process.poll() is not None:
+                # Break loop if cancelled
+                if self.is_cancelled:
+                    break
+
+                line = self.current_process.stderr.readline()
+                if line == '' and self.current_process.poll() is not None:
                     break
                 
                 if line:
@@ -777,17 +799,34 @@ class HashbrownApp(TkinterDnD.Tk):
                         
                         if self.video_duration and self.video_duration > 0:
                             percentage = (current_seconds / self.video_duration) * 100
-                            percentage = min(percentage, 99.9) # Cap at 99 until finished
+                            percentage = min(percentage, 99.9)
                             self.after(0, lambda p=percentage: self._update_progress(p))
 
-            return_code = process.wait()
+            return_code = self.current_process.wait()
             
-            if return_code == 0:
+            if self.is_cancelled:
+                self.after(0, lambda: self.status_label.config(text="Processing cancelled.", foreground='orange'))
+                self.after(0, lambda: self.progress_var.set(0))
+                self.after(0, lambda: self.progress_label.config(text="0%"))
+                
+                # Cleanup the partial output file
+                if output_path and os.path.exists(output_path):
+                    try:
+                        # Small sleep to ensure file handle is released by OS
+                        import time
+                        time.sleep(0.5) 
+                        os.remove(output_path)
+                        print(f"Cleaned up partial file: {output_path}")
+                    except Exception as e:
+                        print(f"Failed to delete partial file: {e}")
+
+            elif return_code == 0:
                 self.after(0, lambda: self._update_progress(100, "Finished!"))
                 success_msg = f"Video processed successfully! Saved to:\n{output_path}"
                 self.after(0, lambda: messagebox.showinfo("Success", success_msg))
                 self.after(0, lambda: self.status_label.config(text="Processing complete.", foreground='green'))
             else:
+                # Only raise error if not cancelled (kill causes non-zero return code)
                 raise subprocess.CalledProcessError(return_code, ffmpeg_cmd)
 
         except subprocess.CalledProcessError as e:
@@ -799,16 +838,21 @@ class HashbrownApp(TkinterDnD.Tk):
             error_msg = f"An error occurred: {str(e)}"
             self.after(0, lambda: self.status_label.config(text="Error during processing", foreground='red'))
             self.after(0, lambda: messagebox.showerror("Error", error_msg))
-            print(e)
+            print(traceback.format_exc())
         finally:
             self.is_processing = False
+            self.current_process = None
+            
+            # Cleanup temp icon
             if temp_icon and os.path.exists(temp_icon):
                 try:
                     os.remove(temp_icon)
                 except:
                     pass
-            if hasattr(self, 'process_button'):
-                self.after(0, lambda: self.process_button.config(state=tk.NORMAL))
+            
+            # Reset buttons
+            self.after(0, lambda: self.process_button.config(state=tk.NORMAL))
+            self.after(0, lambda: self.cancel_btn.config(state=tk.DISABLED))
 
 def main():
     app = HashbrownApp()
