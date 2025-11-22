@@ -297,7 +297,7 @@ class HashbrownApp(TkinterDnD.Tk):
         self._configure_ffmpeg()
         
         self.title("Hashbrown")
-        self.geometry("700x650")
+        self.geometry("700x700") # Increased slightly to accommodate new checkbox
         
         # Set window icon
         logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logo.png')
@@ -313,6 +313,7 @@ class HashbrownApp(TkinterDnD.Tk):
         self.is_video_long = False
         self.segment_rows = []
         self.is_processing = False
+        self.show_overlay_var = tk.BooleanVar(value=True) # Variable for overlay toggle
         
         self._create_widgets()
         self._setup_drag_drop()
@@ -407,6 +408,17 @@ class HashbrownApp(TkinterDnD.Tk):
         
         self.progress_label = ttk.Label(progress_frame, text="0%", font=('Arial', 9))
         self.progress_label.pack()
+
+        # Options Section
+        options_frame = ttk.Frame(self)
+        options_frame.pack(pady=5)
+        
+        self.overlay_check = ttk.Checkbutton(
+            options_frame, 
+            text="Include Overlay Image (Re-encodes video)", 
+            variable=self.show_overlay_var
+        )
+        self.overlay_check.pack()
         
         # Process button
         process_btn = ttk.Button(self, text="Process Video", command=self._process_video, 
@@ -636,85 +648,105 @@ class HashbrownApp(TkinterDnD.Tk):
         Matches original bitrate.
         """
         temp_icon = None
+        include_overlay = self.show_overlay_var.get()
+
         try:
             # Generate output filename
             directory = os.path.dirname(self.video_path)
             filename = os.path.basename(self.video_path)
             name_part, ext_part = os.path.splitext(filename)
-            output_path = os.path.join(directory, f"{name_part}_redacted{ext_part}")
-
-            # Check if mute icon exists
-            mute_icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mute_2.png')
-            if not os.path.exists(mute_icon_path):
-                raise FileNotFoundError("mute_2.png not found in program directory.")
-
-            # Get video height to calculate icon size
-            clip = VideoFileClip(self.video_path)
-            icon_size = int(clip.h / 5)
-            clip.close()
-
-            # Prepare resized mute icon
-            temp_dir = tempfile.gettempdir()
-            temp_icon = os.path.join(temp_dir, 'hashbrown-temp_resized_icon.png')
-            icon_img = Image.open(mute_icon_path)
-            icon_img.thumbnail((icon_size, icon_size), Image.Resampling.LANCZOS)
-            icon_img.save(temp_icon)
-
-            # --- Build FFmpeg Command ---
+            
+            suffix = "_redacted" if include_overlay else "_redacted_fast"
+            output_path = os.path.join(directory, f"{name_part}{suffix}{ext_part}")
             ffmpeg_path = self.ffmpeg_path
 
-            ffmpeg_cmd = [
-                ffmpeg_path, '-y', 
-                '-i', self.video_path, 
-                '-i', temp_icon,
-            ]
-            
-            video_overlay_enables = "+".join([f"between(t,{start},{end})" for start, end in segments])
-            video_filter = f"[0:v][1:v]overlay=5:5:enable='{video_overlay_enables}'[v_out]"
+            ffmpeg_cmd = [ffmpeg_path, '-y', '-i', self.video_path]
 
-            audio_mute_enables = "+".join([f"between(t,{start},{end})" for start, end in segments])
-            audio_filter = f"[0:a]volume=enable='{audio_mute_enables}':volume=0[a_out]"
-            
-            filter_complex = f"{video_filter};{audio_filter}"
-            
-            ffmpeg_cmd.extend([
-                '-filter_complex', filter_complex,
-                '-map', '[v_out]', 
-                '-map', '[a_out]', 
-            ])
+            # --- LOGIC BRANCHING ---
+            if include_overlay:
+                # === Standard Mode: Overlay + Re-encode ===
+                
+                # Check if mute icon exists
+                mute_icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mute_2.png')
+                if not os.path.exists(mute_icon_path):
+                    raise FileNotFoundError("mute_2.png not found in program directory.")
 
-            # Check for NVENC
-            try:
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                encoders = subprocess.check_output([ffmpeg_path, '-encoders'], 
-                                                text=True, 
-                                                startupinfo=startupinfo, 
-                                                stderr=subprocess.STDOUT)
-                has_nvenc = 'h264_nvenc' in encoders
-            except Exception:
-                has_nvenc = False
-            
-            # Calculate bitrates for command arguments
-            # We use a simple heuristic: allocate 128k to audio, rest to video, but assume video_bitrate captured is total.
-            target_audio_bitrate = 128000
-            target_video_bitrate = max(100000, self.video_bitrate - target_audio_bitrate) 
-            
-            # Convert to string for ffmpeg (e.g., "2000k")
-            v_bitrate_str = f"{target_video_bitrate}"
-            a_bitrate_str = f"{target_audio_bitrate}"
+                # Get video height to calculate icon size
+                clip = VideoFileClip(self.video_path)
+                icon_size = int(clip.h / 5)
+                clip.close()
 
-            msg_prefix = "Processing..."
-            if has_nvenc:
-                self.after(0, lambda: self.status_label.config(text=f"{msg_prefix} (Using NVIDIA NVENC - Matching Bitrate)", foreground='blue'))
-                # NVENC: Use -b:v to match bitrate instead of -cq
-                ffmpeg_cmd.extend(['-c:v', 'h264_nvenc', '-preset', 'p4', '-b:v', v_bitrate_str])
+                # Prepare resized mute icon
+                temp_dir = tempfile.gettempdir()
+                temp_icon = os.path.join(temp_dir, 'hashbrown-temp_resized_icon.png')
+                icon_img = Image.open(mute_icon_path)
+                icon_img.thumbnail((icon_size, icon_size), Image.Resampling.LANCZOS)
+                icon_img.save(temp_icon)
+
+                # Add icon input
+                ffmpeg_cmd.extend(['-i', temp_icon])
+                
+                video_overlay_enables = "+".join([f"between(t,{start},{end})" for start, end in segments])
+                video_filter = f"[0:v][1:v]overlay=5:5:enable='{video_overlay_enables}'[v_out]"
+
+                audio_mute_enables = "+".join([f"between(t,{start},{end})" for start, end in segments])
+                audio_filter = f"[0:a]volume=enable='{audio_mute_enables}':volume=0[a_out]"
+                
+                filter_complex = f"{video_filter};{audio_filter}"
+                
+                ffmpeg_cmd.extend([
+                    '-filter_complex', filter_complex,
+                    '-map', '[v_out]', 
+                    '-map', '[a_out]', 
+                ])
+
+                # Check for NVENC
+                try:
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    encoders = subprocess.check_output([ffmpeg_path, '-encoders'], 
+                                                    text=True, 
+                                                    startupinfo=startupinfo, 
+                                                    stderr=subprocess.STDOUT)
+                    has_nvenc = 'h264_nvenc' in encoders
+                except Exception:
+                    has_nvenc = False
+                
+                # Calculate bitrates
+                target_audio_bitrate = 128000
+                target_video_bitrate = max(100000, self.video_bitrate - target_audio_bitrate) 
+                v_bitrate_str = f"{target_video_bitrate}"
+                a_bitrate_str = f"{target_audio_bitrate}"
+
+                msg_prefix = "Processing..."
+                if has_nvenc:
+                    self.after(0, lambda: self.status_label.config(text=f"{msg_prefix} (Using NVIDIA NVENC)", foreground='blue'))
+                    ffmpeg_cmd.extend(['-c:v', 'h264_nvenc', '-preset', 'p4', '-b:v', v_bitrate_str])
+                else:
+                    self.after(0, lambda: self.status_label.config(text=f"{msg_prefix} (Using CPU x264)", foreground='blue'))
+                    ffmpeg_cmd.extend(['-c:v', 'libx264', '-preset', 'fast', '-b:v', v_bitrate_str])
+
+                ffmpeg_cmd.extend(['-c:a', 'aac', '-b:a', a_bitrate_str])
+
             else:
-                self.after(0, lambda: self.status_label.config(text=f"{msg_prefix} (Using CPU x264 - Matching Bitrate)", foreground='blue'))
-                # CPU: Use -b:v to match bitrate instead of -crf
-                ffmpeg_cmd.extend(['-c:v', 'libx264', '-preset', 'fast', '-b:v', v_bitrate_str])
+                # === Fast Mode: No Overlay + Stream Copy ===
+                self.after(0, lambda: self.status_label.config(text="Processing... (Fast Mode - Stream Copy)", foreground='blue'))
+                
+                # Build audio filter string (without [0:a] labels for -af)
+                audio_mute_enables = "+".join([f"between(t,{start},{end})" for start, end in segments])
+                audio_filter = f"volume=enable='{audio_mute_enables}':volume=0"
+                
+                # Use -af (simple audio filter) instead of -filter_complex.
+                # This ensures FFmpeg doesn't get confused and try to process the video.
+                ffmpeg_cmd.extend([
+                    '-c:v', 'copy',      # Direct stream copy (no re-encoding)
+                    '-af', audio_filter, # Simple audio filter chain
+                    '-c:a', 'aac',       # Re-encode audio to apply filter
+                    '-b:a', '128k'       # Default decent audio bitrate
+                ])
 
-            ffmpeg_cmd.extend(['-c:a', 'aac', '-b:a', a_bitrate_str, output_path])
+            # Output file path is last argument
+            ffmpeg_cmd.append(output_path)
 
             # --- Run Process with Progress Parsing ---
             creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
