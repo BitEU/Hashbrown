@@ -1,5 +1,0 @@
-Hashbrown is a program for ADAs, investigators, and anyone else to censor sensitive conversations that occur in videos. Simply run the executable, browse and select your targeted video, select your segment with HH:MM:SS timestamps (or segments if there are several sections that need censoring, click "+Add Segment" to add new segments) and click "Process Video"! Wait a few minutes and voila, you now have your video with the audio of your specified segments removed.
-                                                                                                                                                                                                                                        
-Please keep in mind that this program is slow, and do not panic if it stops responding. This is video editing behidn the scenes and as such is VERY intesive. Be patient, and don't worry if it doesn't seem like it's doing nothing unless it has been over an hour. 
-
-The test file is from https://archive.org/details/ParkCons1938
